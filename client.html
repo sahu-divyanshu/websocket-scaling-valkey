@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>WS Chat Client</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f1117;color:#e2e8f0;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px}
+    h1{font-size:1.4rem;background:linear-gradient(90deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .setup{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
+    input{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:8px 14px;color:#e2e8f0;font-size:0.9rem;outline:none;width:160px}
+    input:focus{border-color:#60a5fa}
+    button{padding:8px 18px;border-radius:8px;border:none;font-size:0.85rem;font-weight:600;cursor:pointer;transition:opacity .2s}
+    button:hover{opacity:.85}
+    .btn-connect{background:#3b82f6;color:#fff}
+    .btn-disconnect{background:#ef4444;color:#fff}
+    .btn-send{background:#8b5cf6;color:#fff}
+    #conn-bar{padding:8px 20px;border-radius:999px;font-size:0.82rem;font-weight:600;display:flex;align-items:center;gap:8px}
+    #conn-bar.connecting{background:#1e293b;color:#94a3b8}
+    #conn-bar.connected{background:#052e16;color:#4ade80}
+    #conn-bar.disconnected{background:#2d1515;color:#f87171}
+    .dot{width:9px;height:9px;border-radius:50%}
+    .connected .dot{background:#4ade80;animation:pulse 1.4s infinite}
+    .disconnected .dot{background:#f87171}
+    .connecting .dot{background:#94a3b8}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    #chat-box{width:100%;max-width:700px;background:#1e293b;border:1px solid #334155;border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px;height:420px}
+    #messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+    #messages::-webkit-scrollbar{width:4px}
+    #messages::-webkit-scrollbar-thumb{background:#334155;border-radius:4px}
+    .msg{padding:8px 12px;border-radius:10px;font-size:0.85rem;animation:fadeIn .2s ease;line-height:1.4}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+    .msg.chat-mine{background:#1e3a5f;border-left:3px solid #3b82f6;align-self:flex-end;max-width:80%}
+    .msg.chat-other{background:#1a1a2e;border-left:3px solid #a78bfa;align-self:flex-start;max-width:80%}
+    .msg.system{background:#172554;border-left:3px solid #60a5fa;font-style:italic;color:#93c5fd;font-size:0.78rem}
+    .msg-header{font-size:0.72rem;color:#64748b;margin-bottom:2px;display:flex;gap:8px}
+    .origin-tag{background:#334155;padding:1px 6px;border-radius:4px;font-size:0.7rem;color:#94a3b8}
+    .input-row{display:flex;gap:8px}
+    .input-row input{flex:1;width:auto}
+    .phase-badge{font-size:0.72rem;padding:3px 10px;border-radius:999px;font-weight:600}
+    .phase-1{background:#451a03;color:#fb923c}
+    .phase-2{background:#052e16;color:#4ade80}
+    .empty{color:#475569;font-size:0.82rem;text-align:center;margin:auto}
+  </style>
+</head>
+<body>
+  <h1>WebSocket Chat — Scaling Demo</h1>
+
+  <div class="setup">
+    <input id="inp-port"     type="number" value="8001"  placeholder="Port"/>
+    <input id="inp-username" type="text"   value="alice" placeholder="Username"/>
+    <button class="btn-connect"    onclick="connectWS()">Connect</button>
+    <button class="btn-disconnect" onclick="disconnectWS()">Disconnect</button>
+  </div>
+
+  <div id="conn-bar" class="disconnected">
+    <div class="dot"></div>
+    <span id="conn-label">Disconnected</span>
+    <span id="phase-badge" class="phase-badge phase-1" style="display:none"></span>
+  </div>
+
+  <div id="chat-box">
+    <div id="messages"><p class="empty">Connect to a server to start chatting</p></div>
+    <div class="input-row">
+      <input id="inp-msg" type="text" placeholder="Type a message and press Enter…"/>
+      <button class="btn-send" onclick="sendMsg()">Send</button>
+    </div>
+  </div>
+
+<script>
+  let ws = null;
+  let myUsername = '';
+  let myPort = '';
+
+  function connectWS() {
+    myPort     = document.getElementById('inp-port').value.trim();
+    myUsername = document.getElementById('inp-username').value.trim();
+    if (!myPort || !myUsername) { alert('Enter both port and username'); return; }
+    if (ws) ws.close();
+
+    setBar('connecting', `Connecting to :${myPort}…`);
+    ws = new WebSocket(`ws://localhost:${myPort}/ws/${encodeURIComponent(myUsername)}`);
+
+    ws.onopen = () => {
+      setBar('connected', `Connected to :${myPort} as ${myUsername}`);
+      // Ask the health endpoint which phase this server is running
+      fetch(`http://localhost:${myPort}/health`)
+        .then(r => r.json())
+        .then(d => showPhaseBadge(d.phase))
+        .catch(() => {});
+    };
+
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      addMessage(data);
+    };
+
+    ws.onclose = () => {
+      setBar('disconnected', 'Disconnected');
+      hidePhaseBadge();
+    };
+
+    ws.onerror = () => ws.close();
+  }
+
+  function disconnectWS() {
+    if (ws) ws.close();
+  }
+
+  function sendMsg() {
+    const inp = document.getElementById('inp-msg');
+    const text = inp.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    inp.value = '';
+    ws.send(text);
+  }
+
+  function addMessage(data) {
+    const box = document.getElementById('messages');
+    if (box.querySelector('.empty')) box.innerHTML = '';
+
+    const el = document.createElement('div');
+    const isMe = data.sender === myUsername && data.type === 'chat';
+
+    if (data.type === 'system') {
+      el.className = 'msg system';
+      el.innerHTML = `<span>🔵 ${data.text}</span> <span class="origin-tag">:${data.origin_port}</span>`;
+    } else {
+      el.className = `msg ${isMe ? 'chat-mine' : 'chat-other'}`;
+      const time = new Date(data.ts * 1000).toLocaleTimeString();
+      el.innerHTML = `
+        <div class="msg-header">
+          <strong>${data.sender}</strong>
+          <span class="origin-tag">via :${data.origin_port}</span>
+          <span>${time}</span>
+        </div>
+        <div>${escapeHtml(data.text)}</div>`;
+    }
+    box.appendChild(el);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function setBar(state, label) {
+    const bar = document.getElementById('conn-bar');
+    bar.className = state;
+    document.getElementById('conn-label').textContent = label;
+  }
+
+  function showPhaseBadge(phase) {
+    const badge = document.getElementById('phase-badge');
+    badge.className = `phase-badge phase-${phase}`;
+    badge.textContent = phase === 2 ? 'Phase 2 — Valkey Bridge ✓' : 'Phase 1 — Isolated ✗';
+    badge.style.display = 'inline';
+  }
+
+  function hidePhaseBadge() {
+    document.getElementById('phase-badge').style.display = 'none';
+  }
+
+  document.getElementById('inp-msg')
+    .addEventListener('keydown', e => { if (e.key === 'Enter') sendMsg(); });
+</script>
+</body>
+</html>
